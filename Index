@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C66 Industrial Mode</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 10px; background: #000; color: #fff; text-align: center; }
+        .step { display: none; }
+        .active { display: block; }
+        #video { width: 100%; max-height: 60vh; background: #222; border-radius: 10px; }
+        .btn { background: #4CAF50; color: #fff; border: none; padding: 20px; width: 100%; border-radius: 10px; font-size: 18px; margin-top: 10px; }
+        .info { background: #222; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 14px; }
+        #barcodeInput { position: absolute; opacity: 0; left: -999px; }
+        #preview img { width: 70px; height: 70px; object-fit: cover; margin: 5px; border: 2px solid #4CAF50; }
+        .key-debug { color: #ff9800; font-family: monospace; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<input type="text" id="barcodeInput" autofocus>
+
+<div id="step1" class="step active">
+    <h2>Крок 1</h2>
+    <p>Скануйте <b>БЕЙДЖ</b></p>
+</div>
+
+<div id="step2" class="step">
+    <h2>Крок 2</h2>
+    <p>Скануйте <b>ОБ'ЄКТ</b></p>
+    <div class="info">Реєстратор: <span id="resReg"></span></div>
+</div>
+
+<div id="step3" class="step">
+    <h2>Крок 3: ФОТО</h2>
+    <div class="info">Об'єкт: <span id="resObj"></span></div>
+    
+    <!-- Вибір камери, якщо чорний екран -->
+    <select id="cameraSelect" onchange="startCamera()" style="width:100%; padding:10px; margin-bottom:10px;"></select>
+    
+    <video id="video" autoplay playsinline></video>
+    
+    <div id="preview"></div>
+    <div class="key-debug">Останній код клавіші: <span id="keyCodeDisp">-</span></div>
+    
+    <button class="btn" onclick="sendData()">ВІДПРАВИТИ</button>
+</div>
+
+<div id="stepLoader" class="step">
+    <h2>⏳ НАДСИЛАННЯ...</h2>
+</div>
+
+<script>
+    const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxZbNbljuX5s_ibw51JvEQAsbzvu0o-YdgVwWIBx4MXolJElOm_VvqSpdnW-F9jlJf6bA/exec"; // ЗАМІНІТЬ НА ВЛАСНИЙ URL
+
+    let data = { registrar: "", qrResult: "", photos: [] };
+    const bInput = document.getElementById('barcodeInput');
+    const video = document.getElementById('video');
+    const camSelect = document.getElementById('cameraSelect');
+
+    // Автофокус для сканера
+    setInterval(() => bInput.focus(), 1000);
+
+    // Ініціалізація списку камер
+    async function initCameras() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        camSelect.innerHTML = videoDevices.map((d, i) => 
+            `<option value="${d.deviceId}">${d.label || 'Камера ' + (i+1)}</option>`
+        ).join('');
+    }
+
+    // Запуск обраної камери
+    async function startCamera() {
+        if (window.stream) window.stream.getTracks().forEach(t => t.stop());
+        
+        const constraints = {
+            video: { deviceId: camSelect.value ? { exact: camSelect.value } : undefined }
+        };
+        
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            window.stream = stream;
+            video.srcObject = stream;
+        } catch (e) {
+            alert("Помилка камери: " + e.message);
+        }
+    }
+
+    // Слухач клавіш (КУРОК)
+    window.addEventListener('keydown', (e) => {
+        document.getElementById('keyCodeDisp').innerText = e.keyCode;
+
+        // Якщо ми на кроці фото
+        if (document.getElementById('step3').classList.contains('active')) {
+            // Коди курка для Chainway: 139, 280, 293, 66 або Enter (13)
+            const triggerKeys = [13, 139, 280, 285, 293, 66];
+            if (triggerKeys.includes(e.keyCode)) {
+                takePhoto();
+                e.preventDefault();
+            }
+        }
+
+        // Сканування тексту
+        if (e.target === bInput && e.key === 'Enter') {
+            setTimeout(() => {
+                const val = bInput.value.trim();
+                if (!val) return;
+                bInput.value = "";
+
+                if (!data.registrar) {
+                    data.registrar = val;
+                    document.getElementById('resReg').innerText = val;
+                    showStep(2);
+                } else if (!data.qrResult) {
+                    data.qrResult = val;
+                    document.getElementById('resObj').innerText = val;
+                    showStep(3);
+                    initCameras().then(startCamera);
+                }
+            }, 100);
+        }
+    });
+
+    function showStep(n) {
+        document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+        document.getElementById('step' + n).classList.add('active');
+    }
+
+    function takePhoto() {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        
+        const base64 = canvas.toDataURL('image/jpeg', 0.5);
+        data.photos.push(base64);
+
+        const img = document.createElement('img');
+        img.src = base64;
+        document.getElementById('preview').appendChild(img);
+        
+        // Візуальний відгук
+        video.style.opacity = 0.5;
+        setTimeout(() => video.style.opacity = 1, 100);
+    }
+
+    function sendData() {
+        if (data.photos.length === 0) return alert("Зробіть фото!");
+        showStep('Loader');
+        
+        fetch(WEB_APP_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            body: JSON.stringify(data)
+        }).then(() => {
+            alert("Успішно!");
+            location.reload();
+        }).catch(err => alert("Помилка: " + err));
+    }
+</script>
+</body>
+</html>
